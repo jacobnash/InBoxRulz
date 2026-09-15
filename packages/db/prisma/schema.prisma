@@ -1,0 +1,145 @@
+// InboxRules data model — see docs/spec.md section 8.
+//
+// This schema is the canonical migration source and the shape that
+// src/models.ts mirrors by hand. Application code talks to the `Repository`
+// port (src/repository.ts), not PrismaClient directly, so a Postgres-backed
+// implementation of that port is the only place that needs `prisma
+// generate` to have been run — everything else (rules engine, worker
+// orchestration, tests) works against the plain TS types and the in-memory
+// reference implementation.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Provider {
+  gmail
+  outlook
+  icloud
+  fastmail
+  zoho
+  imap
+}
+
+enum AccountStatus {
+  pending // OAuth/IMAP handshake started but not confirmed
+  active
+  needs_reauth // token expired/revoked, user must reconnect
+  disabled
+}
+
+enum RuleType {
+  promo_archive
+  receipts_file
+  delivered_trash
+  retention_purge
+  rescue
+}
+
+enum RunStatus {
+  running
+  succeeded
+  failed
+  partial // some rules failed, others completed
+}
+
+enum ActionType {
+  archive
+  trash
+  label
+  unlabel
+  restore_to_inbox
+  mark_read
+}
+
+model User {
+  id               String            @id @default(uuid())
+  email            String            @unique
+  createdAt        DateTime          @default(now()) @map("created_at")
+  connectedAccounts ConnectedAccount[]
+
+  @@map("users")
+}
+
+// One authenticated mailbox. `encryptedCredentials` holds an OAuth token set
+// or IMAP/SMTP app-password, sealed with the envelope-encryption helper in
+// src/crypto.ts — never store or log plaintext credentials.
+model ConnectedAccount {
+  id                    String        @id @default(uuid())
+  userId                String        @map("user_id")
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider              Provider
+  displayName           String        @map("display_name")
+  encryptedCredentials  String        @map("encrypted_credentials") @db.Text
+  status                AccountStatus @default(pending)
+  connectedAt           DateTime      @default(now()) @map("connected_at")
+
+  rules Rule[]
+  runs  Run[]
+
+  @@index([userId])
+  @@map("connected_accounts")
+}
+
+// A rule is scoped to one connected account. `config` holds per-type knobs
+// (retentionDays, rescueKeywords, senderAllow/blockList, ...) validated by
+// the zod schemas in @inboxrulz/rules-engine, not enforced at the DB layer.
+model Rule {
+  id                 String   @id @default(uuid())
+  connectedAccountId String   @map("connected_account_id")
+  connectedAccount   ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+  type               RuleType
+  enabled            Boolean  @default(true)
+  // Rules of the same account run in ascending `order`; deterministic rules
+  // should generally precede rescue so retention_purge only sees mail that
+  // promo_archive/receipts_file already moved out of the inbox.
+  order              Int      @default(0)
+  config             Json     @default("{}")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  runActions RunAction[]
+
+  @@unique([connectedAccountId, type])
+  @@index([connectedAccountId])
+  @@map("rules")
+}
+
+model Run {
+  id                 String    @id @default(uuid())
+  connectedAccountId String    @map("connected_account_id")
+  connectedAccount   ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
+  trigger            String    @default("scheduled") // "scheduled" | "manual"
+  startedAt          DateTime  @default(now()) @map("started_at")
+  finishedAt         DateTime? @map("finished_at")
+  status             RunStatus @default(running)
+  error              String?   @db.Text
+
+  actions RunAction[]
+
+  @@index([connectedAccountId, startedAt])
+  @@map("runs")
+}
+
+// One action taken (or proposed, for a dry run) against one thread by one
+// rule during one run. `reason` carries the LLM's rationale for rescue
+// actions and the matched query/phrase for deterministic ones.
+model RunAction {
+  id        String     @id @default(uuid())
+  runId     String     @map("run_id")
+  run       Run        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ruleId    String     @map("rule_id")
+  rule      Rule       @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  threadId  String     @map("thread_id")
+  action    ActionType
+  reason    String     @db.Text
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  @@index([runId])
+  @@index([threadId])
+  @@map("run_actions")
+}
