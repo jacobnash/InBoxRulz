@@ -3,8 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, type Account } from "@/lib/api";
+import { useAuthUser } from "@/lib/useAuthUser";
+import { signInWithGoogle } from "@/lib/firebase";
 
 export default function HomePage() {
+  const { user, loading: authLoading } = useAuthUser();
+
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,8 +25,8 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    refresh();
-  }, []);
+    if (user) refresh();
+  }, [user]);
 
   async function handleConnect(e: React.FormEvent) {
     e.preventDefault();
@@ -38,6 +42,22 @@ export default function HomePage() {
     } finally {
       setConnecting(false);
     }
+  }
+
+  if (authLoading) return null;
+
+  if (!user) {
+    return (
+      <>
+        <h1>InboxRules</h1>
+        <p className="subtitle">Every connected inbox, and the rules quietly keeping it clean.</p>
+        <div className="card">
+          <h2>Sign in to continue</h2>
+          <p className="rule-desc">Sign in with your Google account to see and manage your connected inboxes.</p>
+          <button onClick={() => signInWithGoogle()}>Sign in with Google</button>
+        </div>
+      </>
+    );
   }
 
   return (

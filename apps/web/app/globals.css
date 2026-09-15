@@ -26,6 +26,21 @@ main {
   padding: 32px 20px 80px;
 }
 
+.auth-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 14px 20px 0;
+}
+
+.auth-email {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 h1 {
   font-size: 1.5rem;
   margin-bottom: 4px;

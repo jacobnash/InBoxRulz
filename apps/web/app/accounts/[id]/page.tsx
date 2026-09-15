@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Account, type Rule, type Run, type RunAction } from "@/lib/api";
+import { useAuthUser } from "@/lib/useAuthUser";
+import { signInWithGoogle } from "@/lib/firebase";
 
 interface RuleField {
   key: string;
@@ -53,6 +55,7 @@ type RuleState = Record<string, { enabled: boolean; config: Record<string, unkno
 export default function AccountPage() {
   const params = useParams<{ id: string }>();
   const accountId = params.id;
+  const { user, loading: authLoading } = useAuthUser();
 
   const [account, setAccount] = useState<Account | null>(null);
   const [ruleState, setRuleState] = useState<RuleState>({});
@@ -77,9 +80,9 @@ export default function AccountPage() {
   }
 
   useEffect(() => {
-    refreshAll();
+    if (user) refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId]);
+  }, [accountId, user]);
 
   async function toggleRule(type: string, enabled: boolean) {
     const current = ruleState[type] ?? { enabled: false, config: {} };
@@ -122,6 +125,22 @@ export default function AccountPage() {
   }
 
   const title = useMemo(() => account?.displayName ?? accountId, [account, accountId]);
+
+  if (authLoading) return null;
+
+  if (!user) {
+    return (
+      <>
+        <Link className="back-link" href="/">
+          ← All inboxes
+        </Link>
+        <div className="card">
+          <h2>Sign in to continue</h2>
+          <button onClick={() => signInWithGoogle()}>Sign in with Google</button>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

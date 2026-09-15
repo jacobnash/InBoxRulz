@@ -14,11 +14,14 @@
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
+    "@inboxrulz/config": "workspace:*",
     "@inboxrulz/db": "workspace:*",
+    "@inboxrulz/logger": "workspace:*",
     "@inboxrulz/mail-connector": "workspace:*",
     "@inboxrulz/rules-engine": "workspace:*",
     "@inboxrulz/worker": "workspace:*",
     "fastify": "^4.28.1",
+    "firebase-admin": "^12.6.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

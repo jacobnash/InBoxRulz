@@ -1,5 +1,8 @@
 import { InMemoryRepository } from "@inboxrulz/db";
+import { readSecret, requireSecret } from "@inboxrulz/config";
+import { createLogger } from "@inboxrulz/logger";
 import { createConnectorForAccount, createAnthropicRescueClassifier, heuristicRescueClassifier } from "@inboxrulz/worker";
+import { createFirebaseIdTokenVerifier } from "./firebaseAuth.js";
 import { buildServer } from "./server.js";
 
 /**
@@ -11,25 +14,41 @@ import { buildServer } from "./server.js";
  * (a shared Postgres-backed Repository) is the integration piece a real
  * deployment still needs.
  */
-const repository = new InMemoryRepository();
+const logger = createLogger("api");
 
-const classifier = process.env.ANTHROPIC_API_KEY
-  ? createAnthropicRescueClassifier({ apiKey: process.env.ANTHROPIC_API_KEY })
+const firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
+if (!firebaseProjectId) {
+  throw new Error(
+    "FIREBASE_PROJECT_ID is not set. This is the Firebase project's id (public config, not a " +
+      "secret) — the same one the dashboard's Firebase client config uses.",
+  );
+}
+
+const repository = new InMemoryRepository();
+const credentialsEncryptionKey = requireSecret("CREDENTIALS_ENCRYPTION_KEY");
+const anthropicApiKey = readSecret("ANTHROPIC_API_KEY");
+
+const classifier = anthropicApiKey
+  ? createAnthropicRescueClassifier({ apiKey: anthropicApiKey })
   : heuristicRescueClassifier;
+if (!anthropicApiKey) {
+  logger.warn("ANTHROPIC_API_KEY not set — rescue rule is using the conservative heuristic fallback, not an LLM.");
+}
 
 const app = buildServer({
   repository,
   classifier,
   connectorFor: (account) => createConnectorForAccount(account),
+  verifyIdToken: createFirebaseIdTokenVerifier(firebaseProjectId),
+  logger,
+  credentialsEncryptionKey,
 });
 
 const port = Number(process.env.PORT ?? 3001);
 app.listen({ port, host: "0.0.0.0" }, (err, address) => {
   if (err) {
-    // eslint-disable-next-line no-console
-    console.error(err);
+    logger.error({ err }, "api failed to start");
     process.exit(1);
   }
-  // eslint-disable-next-line no-console
-  console.log(`[inboxrules] api listening on ${address}`);
+  logger.info({ address }, "api listening");
 });

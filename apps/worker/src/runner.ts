@@ -1,5 +1,6 @@
 import type { ConnectedAccountRecord, Repository, RuleRecord, RunTrigger } from "@inboxrulz/db";
 import type { MailConnector } from "@inboxrulz/mail-connector";
+import { auditLog, type Logger } from "@inboxrulz/logger";
 import {
   TAGS,
   parseRuleConfig,
@@ -23,6 +24,7 @@ const DELIVERED_TRASH_SCAN_WINDOW_DAYS = 45;
 export interface RunOnceOptions {
   trigger: RunTrigger;
   classifier: RescueClassifier;
+  logger: Logger;
   now?: Date;
 }
 
@@ -64,8 +66,7 @@ export async function runOnce(
       sawSuccess = true;
     } catch (err) {
       sawFailure = true;
-      // eslint-disable-next-line no-console
-      console.error(`[inboxrules] rule ${rule.type} failed for account ${account.id}:`, err);
+      options.logger.error({ err, ruleType: rule.type, accountId: account.id, runId: run.id }, "rule failed");
     }
   }
 
@@ -75,6 +76,15 @@ export async function runOnce(
     status,
     sawFailure ? "one or more rules failed; see worker logs for this run" : undefined,
   );
+
+  auditLog(options.logger, {
+    action: "run.completed",
+    actorUserId: account.userId,
+    resourceType: "run",
+    resourceId: run.id,
+    outcome: status === "succeeded" ? "success" : "failure",
+    meta: { connectedAccountId: account.id, trigger: options.trigger, status },
+  });
 }
 
 async function planForRule(

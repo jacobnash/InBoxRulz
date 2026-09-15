@@ -1,23 +1,24 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
-const USER_ID_KEY = "inboxrules_user_id";
+import { getFirebaseAuth } from "./firebase";
 
-/**
- * Stand-in for real session auth (see apps/api/src/auth.ts) — a random id
- * generated once per browser and sent as `x-user-id`. Good enough to
- * demo/dev against; a real login system replaces this, not the API's
- * per-account authorization checks, which stay the same either way.
- */
-export function getUserId(): string {
-  if (typeof window === "undefined") return "";
-  let id = window.localStorage.getItem(USER_ID_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    window.localStorage.setItem(USER_ID_KEY, id);
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
+/** Every API call is authenticated with the signed-in Firebase user's ID
+ * token (see apps/api/src/auth.ts, which verifies it server-side) — this
+ * replaces the old x-user-id placeholder header entirely. Firebase's SDK
+ * refreshes the token under the hood when it's close to expiry, so calling
+ * getIdToken() per-request (rather than caching it) is the correct usage,
+ * not wasteful. */
+async function getAuthHeader(): Promise<Record<string, string>> {
+  const user = getFirebaseAuth().currentUser;
+  if (!user) {
+    throw new Error("Not signed in");
   }
-  return id;
+  const token = await user.getIdToken();
+  return { authorization: `Bearer ${token}` };
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const authHeader = await getAuthHeader();
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
@@ -25,7 +26,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       // (e.g. the bodyless "run now" POST), so only set it when there's
       // actually a body to parse.
       ...(init.body ? { "content-type": "application/json" } : {}),
-      "x-user-id": getUserId(),
+      ...authHeader,
       ...init.headers,
     },
   });

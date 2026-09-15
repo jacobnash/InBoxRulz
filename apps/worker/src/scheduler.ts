@@ -2,12 +2,14 @@ import cron, { type ScheduledTask } from "node-cron";
 import type { ConnectedAccountRecord, Repository } from "@inboxrulz/db";
 import type { MailConnector } from "@inboxrulz/mail-connector";
 import type { RescueClassifier } from "@inboxrulz/rules-engine";
+import type { Logger } from "@inboxrulz/logger";
 import { runOnce } from "./runner.js";
 
 export interface WorkerDeps {
   repository: Repository;
   classifier: RescueClassifier;
   connectorFor: (account: ConnectedAccountRecord) => MailConnector;
+  logger: Logger;
 }
 
 /** Default daily run time: 6am. Per-account overrides aren't implemented
@@ -26,11 +28,11 @@ export async function runAllActiveAccounts(deps: WorkerDeps, now?: Date): Promis
       await runOnce(account, connector, deps.repository, {
         trigger: "scheduled",
         classifier: deps.classifier,
+        logger: deps.logger,
         now,
       });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(`[inboxrules] scheduled run failed to start for account ${account.id}:`, err);
+      deps.logger.error({ err, accountId: account.id }, "scheduled run failed to start");
     }
   }
 }
@@ -44,6 +46,7 @@ export async function runAccountNow(accountId: string, deps: WorkerDeps): Promis
   await runOnce(account, connector, deps.repository, {
     trigger: "manual",
     classifier: deps.classifier,
+    logger: deps.logger,
   });
 }
 
@@ -53,8 +56,7 @@ export function scheduleDailyRuns(
 ): ScheduledTask {
   return cron.schedule(cronExpression, () => {
     runAllActiveAccounts(deps).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error("[inboxrules] scheduled sweep failed:", err);
+      deps.logger.error({ err }, "scheduled sweep failed");
     });
   });
 }

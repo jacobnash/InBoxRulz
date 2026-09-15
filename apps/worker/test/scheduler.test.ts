@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { Writable } from "node:stream";
 import { InMemoryRepository, type ConnectedAccountRecord } from "@inboxrulz/db";
 import { MockConnector } from "@inboxrulz/mail-connector";
 import type { RescueClassifier } from "@inboxrulz/rules-engine";
+import { createLogger } from "@inboxrulz/logger";
 import { runAllActiveAccounts, runAccountNow } from "../src/scheduler.js";
+
+const logger = createLogger("test-worker", { stream: new Writable({ write: (_c, _e, cb) => cb() }) });
 
 function makeAccount(overrides: Partial<ConnectedAccountRecord> = {}): ConnectedAccountRecord {
   return {
@@ -33,7 +37,7 @@ describe("runAllActiveAccounts", () => {
       return new MockConnector({ messages: [] });
     });
 
-    await runAllActiveAccounts({ repository: repo, classifier, connectorFor });
+    await runAllActiveAccounts({ repository: repo, classifier, connectorFor, logger });
 
     expect(connectorFor).toHaveBeenCalledTimes(2); // good + bad, never the disabled one
     const goodRuns = await repo.listRuns("good");
@@ -48,7 +52,7 @@ describe("runAccountNow", () => {
     repo.seedAccount(makeAccount());
     const connectorFor = () => new MockConnector({ messages: [] });
 
-    await runAccountNow("acct-1", { repository: repo, classifier, connectorFor });
+    await runAccountNow("acct-1", { repository: repo, classifier, connectorFor, logger });
 
     const runs = await repo.listRuns("acct-1");
     expect(runs).toHaveLength(1);
@@ -58,7 +62,7 @@ describe("runAccountNow", () => {
   it("throws for an unknown account", async () => {
     const repo = new InMemoryRepository();
     const connectorFor = () => new MockConnector({ messages: [] });
-    await expect(runAccountNow("missing", { repository: repo, classifier, connectorFor })).rejects.toThrow(
+    await expect(runAccountNow("missing", { repository: repo, classifier, connectorFor, logger })).rejects.toThrow(
       /Unknown connected account/,
     );
   });

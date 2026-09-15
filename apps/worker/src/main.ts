@@ -1,4 +1,6 @@
 import { InMemoryRepository } from "@inboxrulz/db";
+import { readSecret, requireSecret } from "@inboxrulz/config";
+import { createLogger } from "@inboxrulz/logger";
 import { createConnectorForAccount } from "./connectorFactory.js";
 import { createAnthropicRescueClassifier, heuristicRescueClassifier } from "./rescueClassifier.js";
 import { scheduleDailyRuns, DEFAULT_CRON_SCHEDULE, type WorkerDeps } from "./scheduler.js";
@@ -14,26 +16,26 @@ import { scheduleDailyRuns, DEFAULT_CRON_SCHEDULE, type WorkerDeps } from "./sch
  * this same wiring, shared with apps/api, is the integration piece a real
  * deployment still needs — see docs/spec.md section 6 and the root README.
  */
+const logger = createLogger("worker");
 const repository = new InMemoryRepository();
+const credentialsEncryptionKey = requireSecret("CREDENTIALS_ENCRYPTION_KEY");
 
-const classifier = process.env.ANTHROPIC_API_KEY
-  ? createAnthropicRescueClassifier({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropicApiKey = readSecret("ANTHROPIC_API_KEY");
+const classifier = anthropicApiKey
+  ? createAnthropicRescueClassifier({ apiKey: anthropicApiKey })
   : heuristicRescueClassifier;
 
-if (classifier === heuristicRescueClassifier) {
-  // eslint-disable-next-line no-console
-  console.warn(
-    "[inboxrules] ANTHROPIC_API_KEY not set — rescue rule is using the conservative heuristic fallback, not an LLM.",
-  );
+if (!anthropicApiKey) {
+  logger.warn("ANTHROPIC_API_KEY not set — rescue rule is using the conservative heuristic fallback, not an LLM.");
 }
 
 const deps: WorkerDeps = {
   repository,
   classifier,
-  connectorFor: (account) => createConnectorForAccount(account),
+  connectorFor: (account) => createConnectorForAccount(account, credentialsEncryptionKey),
+  logger,
 };
 
 const cronExpression = process.env.CRON_SCHEDULE ?? DEFAULT_CRON_SCHEDULE;
 scheduleDailyRuns(deps, cronExpression);
-// eslint-disable-next-line no-console
-console.log(`[inboxrules] worker started, scheduled runs on "${cronExpression}"`);
+logger.info({ cronExpression }, "worker started");

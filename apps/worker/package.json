@@ -14,7 +14,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",
+    "@inboxrulz/config": "workspace:*",
     "@inboxrulz/db": "workspace:*",
+    "@inboxrulz/logger": "workspace:*",
     "@inboxrulz/mail-connector": "workspace:*",
     "@inboxrulz/rules-engine": "workspace:*",
     "google-auth-library": "^9.14.1",

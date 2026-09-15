@@ -17,10 +17,12 @@ packages/
   rules-engine/    Pure, provider-agnostic rule logic (the 5 rule types)
   mail-connector/  MailConnector interface + Gmail adapter + in-memory mock
   db/              Data model, credential encryption, Repository port
+  config/          Secret loading (env var, or Docker-secrets-file convention)
+  logger/          Structured JSON logging + the security audit trail
 apps/
   worker/          Run orchestrator + daily scheduler + rescue classifiers
-  api/             REST API (Fastify): connect accounts, rule CRUD, run log
-  web/             Dashboard (Next.js): inbox list, rule toggles, run log
+  api/             REST API (Fastify): auth, connect accounts, rule CRUD, run log
+  web/             Dashboard (Next.js): sign-in, inbox list, rule toggles, run log
 ```
 
 ### Design choices worth knowing about
@@ -54,11 +56,31 @@ apps/
   `packages/rules-engine/src/rules/rescue.ts`. `apps/worker` ships both a
   zero-dependency heuristic fallback and a Claude-backed classifier
   (`ANTHROPIC_API_KEY`).
-- **Auth is a placeholder.** `apps/api` identifies callers via an
-  `x-user-id` header (see `apps/api/src/auth.ts`). Real session/JWT auth and
-  the Gmail/Outlook OAuth consent flows (spec section 9 — these need
-  provider app registration and review) are the other major piece not yet
-  built.
+- **Auth is real, via Firebase (Google SSO).** The dashboard signs users in
+  with Firebase Auth's Google provider; `apps/api` verifies the resulting ID
+  token server-side on every request (`apps/api/src/firebaseAuth.ts`,
+  `firebase-admin`) — no shared secret needed for verification, just the
+  Firebase project id (public config). Adding another SSO provider (Entra
+  ID, a SAML/OIDC IdP) is a Firebase console change plus one more sign-in
+  button, not a backend change: the API only ever sees a verified token,
+  never which provider issued it. What's still missing is the Gmail/Outlook
+  *mail* OAuth consent flow (spec section 9 — that needs its own provider
+  app registration and review, separate from user login).
+- **Structured logging + a security audit trail.** Every process logs JSON
+  to stdout via `packages/logger` (point any collector — CloudWatch, GCP
+  Logging, Datadog, Better Stack — at stdout, no code change needed).
+  Credentials, tokens, and passwords are redacted wherever they'd appear in
+  a log line. Distinct from that: an `auditLog()` call records
+  security-relevant events (failed auth, denied cross-tenant access,
+  account connected, rule changed, run triggered/completed) as
+  `{"audit": true, ...}` lines — the trail a SOC2-style review actually asks
+  for, separate from the product's own `run_actions` log of what a rule did
+  to a user's mail.
+- **Secrets work without a cloud secrets manager.** `packages/config`
+  reads a secret from a plain env var or, preferably on a VPS/Docker host,
+  from a file via the `<NAME>_FILE` convention (Docker/Compose secrets) —
+  same code path either way, and a missing secret fails fast with an
+  actionable error instead of a confusing crash three calls deep.
 
 ## Getting started
 
@@ -68,14 +90,28 @@ pnpm --filter @inboxrulz/rules-engine test   # pure logic, no setup needed
 pnpm -r test                                  # every package/app
 ```
 
-Run the API and dashboard together:
+### One-time Firebase setup (for real sign-in)
+
+1. Create a project at [console.firebase.google.com](https://console.firebase.google.com) (or use an existing one).
+2. Authentication -> Sign-in method -> enable **Google**.
+3. Project settings -> General -> Your apps -> add a **Web app** — copy its
+   `apiKey`, `authDomain`, `projectId`, `appId` into `apps/web/.env.local`
+   (see `apps/web/.env.example`). These are public client config, not secrets.
+4. Put the same `projectId` in `apps/api/.env` as `FIREBASE_PROJECT_ID`
+   (see `apps/api/.env.example`). No service-account key is needed —
+   verifying an ID token only checks its signature against Google's own
+   public keys plus this project id.
+
+### Run everything
 
 ```
-# terminal 1
+# terminal 1 — api
+cp apps/api/.env.example apps/api/.env   # fill in FIREBASE_PROJECT_ID
 CREDENTIALS_ENCRYPTION_KEY=$(openssl rand -base64 32) pnpm --filter @inboxrulz/api start
 
-# terminal 2
-NEXT_PUBLIC_API_URL=http://localhost:3001 pnpm --filter @inboxrulz/web build && pnpm --filter @inboxrulz/web start
+# terminal 2 — dashboard
+cp apps/web/.env.example apps/web/.env.local   # fill in the Firebase web config
+pnpm --filter @inboxrulz/web build && pnpm --filter @inboxrulz/web start
 ```
 
 Both processes default to an in-memory store, so state resets on restart
@@ -86,12 +122,19 @@ The worker runs the same pipeline on a daily cron (`apps/worker`, default
 6am; override with `CRON_SCHEDULE`) — start it with
 `pnpm --filter @inboxrulz/worker start`. Set `ANTHROPIC_API_KEY` for real
 rescue-rule judgment; without it, the worker logs a warning and falls back
-to the conservative heuristic classifier.
+to the conservative heuristic classifier. `CREDENTIALS_ENCRYPTION_KEY` must
+be the same value as the API's.
+
+On a VPS or self-managed Docker host with no cloud secrets manager, prefer
+mounting secrets as files and pointing `<NAME>_FILE` at them (Docker/Compose
+secrets convention) over plain env vars — see `packages/config`.
 
 ## What's not here yet
 
 - A Postgres-backed `Repository` shared by `apps/api` and `apps/worker`
 - Outlook/365 and IMAP `MailConnector` adapters
-- Real user auth + OAuth consent flows for Gmail/Outlook
+- The Gmail/Outlook *mail* OAuth consent flow (separate from the Firebase
+  user-login flow, which is now real) — needed once "connect an inbox" does
+  more than accept an already-obtained token set
 - The V2 feature set (custom rule builder, notifications, undo window,
   cross-account view — spec section 5)

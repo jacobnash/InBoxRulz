@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
 import {
@@ -11,13 +11,16 @@ import {
 import type { MailConnector } from "@inboxrulz/mail-connector";
 import { parseRuleConfig, type RescueClassifier } from "@inboxrulz/rules-engine";
 import { runAccountNow } from "@inboxrulz/worker";
-import { requireUserId } from "./auth.js";
+import { auditLog, type Logger } from "@inboxrulz/logger";
+import { authenticate, type IdTokenVerifier } from "./auth.js";
 import { serializeAccount } from "./serializers.js";
 
 export interface ApiDeps {
   repository: Repository;
   classifier: RescueClassifier;
   connectorFor: (account: ConnectedAccountRecord) => MailConnector;
+  verifyIdToken: IdTokenVerifier;
+  logger: Logger;
   credentialsEncryptionKey?: string;
 }
 
@@ -38,34 +41,50 @@ const upsertRuleBody = z.object({
 });
 
 /** Loads a connected account and 404s (never 403 — don't confirm the id
- * exists to someone who doesn't own it) unless it belongs to `userId`. */
+ * exists to someone who doesn't own it) unless it belongs to `userId`. A
+ * mismatch is also written to the audit log — a signal worth having if it
+ * ever happens more than once for the same actor. */
 async function loadOwnedAccount(
   repository: Repository,
+  logger: Logger,
   userId: string,
   accountId: string,
 ): Promise<ConnectedAccountRecord | null> {
   const account = await repository.getConnectedAccount(accountId);
-  if (!account || account.userId !== userId) return null;
+  if (!account || account.userId !== userId) {
+    auditLog(logger, {
+      action: "access.denied",
+      actorUserId: userId,
+      resourceType: "connected_account",
+      resourceId: accountId,
+      outcome: "denied",
+    });
+    return null;
+  }
   return account;
 }
 
 export function buildServer(deps: ApiDeps): FastifyInstance {
-  const app = Fastify({ logger: false });
+  // Cast at the type level only: Fastify's generics fix the request logger
+  // type to FastifyBaseLogger, which our pino instance already satisfies
+  // structurally (info/warn/error/child/...) — the object handed to
+  // Fastify at runtime is still the real, redacting pino logger.
+  const app = Fastify({ logger: deps.logger as FastifyBaseLogger });
   void app.register(cors, { origin: true });
-  const { repository } = deps;
+  const { repository, logger } = deps;
 
   app.get("/health", async () => ({ ok: true }));
 
   app.get("/accounts", async (request, reply) => {
-    const userId = requireUserId(request, reply);
-    if (!userId) return;
-    const accounts = await repository.listConnectedAccountsForUser(userId);
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
+    const accounts = await repository.listConnectedAccountsForUser(user.uid);
     return accounts.map(serializeAccount);
   });
 
   app.post("/accounts", async (request, reply) => {
-    const userId = requireUserId(request, reply);
-    if (!userId) return;
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
     const parsed = connectAccountBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -75,28 +94,36 @@ export function buildServer(deps: ApiDeps): FastifyInstance {
       deps.credentialsEncryptionKey,
     );
     const account = await repository.createConnectedAccount({
-      userId,
+      userId: user.uid,
       provider: parsed.data.provider,
       displayName: parsed.data.displayName,
       encryptedCredentials,
+    });
+    auditLog(logger, {
+      action: "account.connected",
+      actorUserId: user.uid,
+      resourceType: "connected_account",
+      resourceId: account.id,
+      outcome: "success",
+      meta: { provider: account.provider },
     });
     return reply.code(201).send(serializeAccount(account));
   });
 
   app.get("/accounts/:id/rules", async (request, reply) => {
-    const userId = requireUserId(request, reply);
-    if (!userId) return;
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
     const { id } = request.params as { id: string };
-    const account = await loadOwnedAccount(repository, userId, id);
+    const account = await loadOwnedAccount(repository, logger, user.uid, id);
     if (!account) return reply.code(404).send({ error: "Account not found" });
     return repository.listRulesForAccount(id);
   });
 
   app.put("/accounts/:id/rules/:type", async (request, reply) => {
-    const userId = requireUserId(request, reply);
-    if (!userId) return;
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
     const { id, type } = request.params as { id: string; type: string };
-    const account = await loadOwnedAccount(repository, userId, id);
+    const account = await loadOwnedAccount(repository, logger, user.uid, id);
     if (!account) return reply.code(404).send({ error: "Account not found" });
     if (!RULE_TYPES.includes(type as (typeof RULE_TYPES)[number])) {
       return reply.code(404).send({ error: `Unknown rule type "${type}"` });
@@ -122,14 +149,22 @@ export function buildServer(deps: ApiDeps): FastifyInstance {
       order: parsedBody.data.order,
       config,
     });
+    auditLog(logger, {
+      action: "rule.updated",
+      actorUserId: user.uid,
+      resourceType: "rule",
+      resourceId: rule.id,
+      outcome: "success",
+      meta: { connectedAccountId: id, ruleType, enabled: rule.enabled },
+    });
     return rule;
   });
 
   app.post("/accounts/:id/run", async (request, reply) => {
-    const userId = requireUserId(request, reply);
-    if (!userId) return;
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
     const { id } = request.params as { id: string };
-    const account = await loadOwnedAccount(repository, userId, id);
+    const account = await loadOwnedAccount(repository, logger, user.uid, id);
     if (!account) return reply.code(404).send({ error: "Account not found" });
 
     try {
@@ -137,10 +172,27 @@ export function buildServer(deps: ApiDeps): FastifyInstance {
         repository: deps.repository,
         classifier: deps.classifier,
         connectorFor: deps.connectorFor,
+        logger: deps.logger,
       });
     } catch (err) {
+      auditLog(logger, {
+        action: "run.triggered",
+        actorUserId: user.uid,
+        resourceType: "run",
+        resourceId: id,
+        outcome: "failure",
+        meta: { reason: String(err) },
+      });
       return reply.code(502).send({ error: `Run failed to start: ${String(err)}` });
     }
+
+    auditLog(logger, {
+      action: "run.triggered",
+      actorUserId: user.uid,
+      resourceType: "run",
+      resourceId: id,
+      outcome: "success",
+    });
 
     const [latestRun] = await repository.listRuns(id, 1);
     const actions = latestRun ? await repository.listActionsForRun(latestRun.id) : [];
@@ -148,20 +200,20 @@ export function buildServer(deps: ApiDeps): FastifyInstance {
   });
 
   app.get("/accounts/:id/runs", async (request, reply) => {
-    const userId = requireUserId(request, reply);
-    if (!userId) return;
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
     const { id } = request.params as { id: string };
-    const account = await loadOwnedAccount(repository, userId, id);
+    const account = await loadOwnedAccount(repository, logger, user.uid, id);
     if (!account) return reply.code(404).send({ error: "Account not found" });
     const { limit } = request.query as { limit?: string };
     return repository.listRuns(id, limit ? Number(limit) : undefined);
   });
 
   app.get("/accounts/:id/runs/:runId/actions", async (request, reply) => {
-    const userId = requireUserId(request, reply);
-    if (!userId) return;
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
     const { id, runId } = request.params as { id: string; runId: string };
-    const account = await loadOwnedAccount(repository, userId, id);
+    const account = await loadOwnedAccount(repository, logger, user.uid, id);
     if (!account) return reply.code(404).send({ error: "Account not found" });
     return repository.listActionsForRun(runId);
   });

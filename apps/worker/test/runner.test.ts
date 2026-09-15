@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { Writable } from "node:stream";
 import { InMemoryRepository, type ConnectedAccountRecord } from "@inboxrulz/db";
 import { MockConnector } from "@inboxrulz/mail-connector";
 import { TAGS, type NormalizedMessage, type RescueClassifier } from "@inboxrulz/rules-engine";
+import { createLogger } from "@inboxrulz/logger";
 import { runOnce } from "../src/runner.js";
 
 const now = new Date("2026-02-01T00:00:00Z");
+const logger = createLogger("test-worker", { stream: new Writable({ write: (_c, _e, cb) => cb() }) });
 
 function daysAgo(days: number): Date {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
@@ -76,7 +79,7 @@ describe("runOnce", () => {
 
     const connector = new MockConnector({ now, messages: [promo, purchase, delivered, agedOut] });
 
-    await runOnce(account, connector, repo, { trigger: "manual", classifier: neverImportant, now });
+    await runOnce(account, connector, repo, { trigger: "manual", classifier: neverImportant, logger, now });
 
     expect(connector.getState("promo")?.inInbox).toBe(false);
     expect(connector.getState("promo")?.tags).toContain(TAGS.PROMO_ARCHIVED);
@@ -109,7 +112,7 @@ describe("runOnce", () => {
     const connector = new MockConnector({ now, messages: [important] });
     const alwaysImportant: RescueClassifier = () => ({ important: true, reason: "looks important" });
 
-    await runOnce(account, connector, repo, { trigger: "manual", classifier: alwaysImportant, now });
+    await runOnce(account, connector, repo, { trigger: "manual", classifier: alwaysImportant, logger, now });
     expect(connector.getState("important")?.inInbox).toBe(true);
     expect(connector.getState("important")?.tags).toContain(TAGS.RESCUED);
 
@@ -122,7 +125,7 @@ describe("runOnce", () => {
       action: "archive",
       reason: "user re-archived",
     });
-    await runOnce(account, connector, repo, { trigger: "manual", classifier: alwaysImportant, now });
+    await runOnce(account, connector, repo, { trigger: "manual", classifier: alwaysImportant, logger, now });
     expect(connector.getState("important")?.inInbox).toBe(false);
   });
 
@@ -153,7 +156,7 @@ describe("runOnce", () => {
       return originalListMessages(query);
     };
 
-    await runOnce(account, connector, repo, { trigger: "manual", classifier: neverImportant, now });
+    await runOnce(account, connector, repo, { trigger: "manual", classifier: neverImportant, logger, now });
 
     const [run] = await repo.listRuns(account.id);
     expect(run.status).toBe("partial");
@@ -175,7 +178,7 @@ describe("runOnce", () => {
     const promo = makeMessage({ threadId: "promo", category: "promotions", inInbox: true });
     const connector = new MockConnector({ now, messages: [promo] });
 
-    await runOnce(account, connector, repo, { trigger: "manual", classifier: neverImportant, now });
+    await runOnce(account, connector, repo, { trigger: "manual", classifier: neverImportant, logger, now });
     expect(connector.getState("promo")?.inInbox).toBe(true);
   });
 });
