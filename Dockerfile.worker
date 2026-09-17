@@ -2,6 +2,7 @@
 # a compiled dist/ build.
 FROM node:20-alpine
 WORKDIR /app
+RUN apk add --no-cache openssl
 RUN corepack enable
 
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
