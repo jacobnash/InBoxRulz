@@ -7,7 +7,8 @@ cd "$(dirname "$0")/../.."
 
 mkdir -p secrets
 gen() {
-  local name="$1" file="secrets/$name"
+  local name="$1"
+  local file="secrets/$name"
   if [[ -f "$file" ]]; then
     echo "secrets/$name already exists, leaving it alone"
     return
