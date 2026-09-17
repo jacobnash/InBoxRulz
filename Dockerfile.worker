@@ -1,0 +1,14 @@
+# See Dockerfile.api for why this runs via tsx against source rather than
+# a compiled dist/ build.
+FROM node:20-alpine
+WORKDIR /app
+RUN corepack enable
+
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY packages ./packages
+COPY apps/worker ./apps/worker
+RUN pnpm install --frozen-lockfile --prod=false
+RUN pnpm --filter @inboxrulz/db exec prisma generate
+
+ENV NODE_ENV=production
+CMD ["pnpm", "--filter", "@inboxrulz/worker", "start"]

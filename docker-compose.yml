@@ -1,0 +1,96 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inboxrulz
+      POSTGRES_USER: inboxrulz
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inboxrulz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: applies prisma/migrations against `postgres`, then exits.
+  # api/worker wait on it via `service_completed_successfully`.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["pnpm", "--filter", "@inboxrulz/db", "exec", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets: [database_url]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      PORT: 3001
+      CREDENTIALS_ENCRYPTION_KEY_FILE: /run/secrets/credentials_encryption_key
+      DATABASE_URL_FILE: /run/secrets/database_url
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+    secrets: [credentials_encryption_key, database_url, anthropic_api_key]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8090}:3001"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      CREDENTIALS_ENCRYPTION_KEY_FILE: /run/secrets/credentials_encryption_key
+      DATABASE_URL_FILE: /run/secrets/database_url
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+    secrets: [credentials_encryption_key, database_url, anthropic_api_key]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_FIREBASE_API_KEY: ${NEXT_PUBLIC_FIREBASE_API_KEY}
+        NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}
+        NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID}
+        NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-8091}:3000"
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  credentials_encryption_key:
+    file: ./secrets/credentials_encryption_key
+  database_url:
+    file: ./secrets/database_url
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key
+
+volumes:
+  pgdata:

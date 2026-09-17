@@ -8,9 +8,15 @@
   "scripts": {
     "generate": "prisma generate",
     "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "prebuild": "prisma generate",
     "build": "tsc -p tsconfig.json",
+    "pretest": "prisma generate",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0"
   },
   "devDependencies": {
     "@types/node": "^20.16.5",

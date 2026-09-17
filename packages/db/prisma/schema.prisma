@@ -56,22 +56,18 @@ enum ActionType {
   mark_read
 }
 
-model User {
-  id               String            @id @default(uuid())
-  email            String            @unique
-  createdAt        DateTime          @default(now()) @map("created_at")
-  connectedAccounts ConnectedAccount[]
-
-  @@map("users")
-}
-
 // One authenticated mailbox. `encryptedCredentials` holds an OAuth token set
 // or IMAP/SMTP app-password, sealed with the envelope-encryption helper in
 // src/crypto.ts — never store or log plaintext credentials.
+//
+// `userId` is Firebase's own `uid` (see apps/api/src/firebaseAuth.ts) — not
+// a foreign key to a local table. Firebase is the source of truth for user
+// identity; this app never needs to join against a local `users` row, so
+// there isn't one (a FK here would fail on the very first connected
+// account, since nothing creates that row).
 model ConnectedAccount {
   id                    String        @id @default(uuid())
   userId                String        @map("user_id")
-  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   provider              Provider
   displayName           String        @map("display_name")
   encryptedCredentials  String        @map("encrypted_credentials") @db.Text

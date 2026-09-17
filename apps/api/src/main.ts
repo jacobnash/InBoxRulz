@@ -1,4 +1,4 @@
-import { InMemoryRepository } from "@inboxrulz/db";
+import { InMemoryRepository, PostgresRepository, createPrismaClient, type Repository } from "@inboxrulz/db";
 import { readSecret, requireSecret } from "@inboxrulz/config";
 import { createLogger } from "@inboxrulz/logger";
 import { createConnectorForAccount, createAnthropicRescueClassifier, heuristicRescueClassifier } from "@inboxrulz/worker";
@@ -24,7 +24,13 @@ if (!firebaseProjectId) {
   );
 }
 
-const repository = new InMemoryRepository();
+const databaseUrl = readSecret("DATABASE_URL");
+const repository: Repository = databaseUrl
+  ? new PostgresRepository(createPrismaClient(databaseUrl))
+  : new InMemoryRepository();
+if (!databaseUrl) {
+  logger.warn("DATABASE_URL not set — using an in-memory store (state resets on restart, not shared with the worker).");
+}
 const credentialsEncryptionKey = requireSecret("CREDENTIALS_ENCRYPTION_KEY");
 const anthropicApiKey = readSecret("ANTHROPIC_API_KEY");
 

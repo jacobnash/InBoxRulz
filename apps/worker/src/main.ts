@@ -1,4 +1,4 @@
-import { InMemoryRepository } from "@inboxrulz/db";
+import { InMemoryRepository, PostgresRepository, createPrismaClient, type Repository } from "@inboxrulz/db";
 import { readSecret, requireSecret } from "@inboxrulz/config";
 import { createLogger } from "@inboxrulz/logger";
 import { createConnectorForAccount } from "./connectorFactory.js";
@@ -17,7 +17,13 @@ import { scheduleDailyRuns, DEFAULT_CRON_SCHEDULE, type WorkerDeps } from "./sch
  * deployment still needs — see docs/spec.md section 6 and the root README.
  */
 const logger = createLogger("worker");
-const repository = new InMemoryRepository();
+const databaseUrl = readSecret("DATABASE_URL");
+const repository: Repository = databaseUrl
+  ? new PostgresRepository(createPrismaClient(databaseUrl))
+  : new InMemoryRepository();
+if (!databaseUrl) {
+  logger.warn("DATABASE_URL not set — using an in-memory store (state resets on restart, not shared with the api).");
+}
 const credentialsEncryptionKey = requireSecret("CREDENTIALS_ENCRYPTION_KEY");
 
 const anthropicApiKey = readSecret("ANTHROPIC_API_KEY");

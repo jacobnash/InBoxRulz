@@ -69,7 +69,7 @@ export function buildServer(deps: ApiDeps): FastifyInstance {
   // type to FastifyBaseLogger, which our pino instance already satisfies
   // structurally (info/warn/error/child/...) — the object handed to
   // Fastify at runtime is still the real, redacting pino logger.
-  const app = Fastify({ logger: deps.logger as FastifyBaseLogger });
+  const app = Fastify({ loggerInstance: deps.logger as FastifyBaseLogger });
   void app.register(cors, { origin: true });
   const { repository, logger } = deps;
 

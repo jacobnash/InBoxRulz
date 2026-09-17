@@ -1,0 +1,27 @@
+# NEXT_PUBLIC_* vars are inlined into the client bundle at build time by
+# Next.js, so they must arrive as build ARGs, not runtime environment vars.
+# They're public client config (see apps/web/.env.example), not secrets.
+FROM node:20-alpine AS build
+WORKDIR /app
+RUN corepack enable
+
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY packages ./packages
+COPY apps/web ./apps/web
+RUN pnpm install --frozen-lockfile --prod=false
+
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_FIREBASE_API_KEY
+ARG NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+ARG NEXT_PUBLIC_FIREBASE_PROJECT_ID
+ARG NEXT_PUBLIC_FIREBASE_APP_ID
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_FIREBASE_API_KEY=$NEXT_PUBLIC_FIREBASE_API_KEY \
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=$NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN \
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID=$NEXT_PUBLIC_FIREBASE_PROJECT_ID \
+    NEXT_PUBLIC_FIREBASE_APP_ID=$NEXT_PUBLIC_FIREBASE_APP_ID
+RUN pnpm --filter @inboxrulz/web build
+
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["pnpm", "--filter", "@inboxrulz/web", "start"]

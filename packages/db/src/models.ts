@@ -37,12 +37,6 @@ export const ACTION_TYPES = [
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
-export interface UserRecord {
-  id: string;
-  email: string;
-  createdAt: Date;
-}
-
 export interface ConnectedAccountRecord {
   id: string;
   userId: string;

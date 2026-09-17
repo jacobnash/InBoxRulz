@@ -1,0 +1,19 @@
+# Runs via tsx against source, same as `pnpm --filter @inboxrulz/api start`
+# locally — see the README. Not a compiled dist/ build: every @inboxrulz/*
+# package's package.json points "main" at its TS source, which only tsx
+# (not plain node) can run, so matching the existing dev/start path is the
+# simplest thing that's actually correct, not a shortcut around it.
+FROM node:20-alpine
+WORKDIR /app
+RUN corepack enable
+
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY packages ./packages
+COPY apps/api ./apps/api
+COPY apps/worker ./apps/worker
+RUN pnpm install --frozen-lockfile --prod=false
+RUN pnpm --filter @inboxrulz/db exec prisma generate
+
+ENV NODE_ENV=production
+EXPOSE 3001
+CMD ["pnpm", "--filter", "@inboxrulz/api", "start"]
