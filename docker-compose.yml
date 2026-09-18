@@ -23,9 +23,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    command: ["pnpm", "--filter", "@inboxrulz/db", "exec", "prisma", "migrate", "deploy"]
-    environment:
-      DATABASE_URL_FILE: /run/secrets/database_url
+    # The Prisma CLI (unlike our own PrismaClient wrapper in
+    # packages/db) reads DATABASE_URL straight from process.env — it has
+    # no notion of the app's DATABASE_URL_FILE convention, so it has to be
+    # exported from the secret file first.
+    command: ["sh", "-c", "export DATABASE_URL=$$(cat /run/secrets/database_url) && pnpm --filter @inboxrulz/db exec prisma migrate deploy"]
     secrets: [database_url]
     depends_on:
       postgres:
