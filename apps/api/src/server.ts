@@ -14,6 +14,8 @@ import { runAccountNow } from "@inboxrulz/worker";
 import { auditLog, type Logger } from "@inboxrulz/logger";
 import { authenticate, type IdTokenVerifier } from "./auth.js";
 import { serializeAccount } from "./serializers.js";
+import type { GoogleOAuth } from "./googleOAuth.js";
+import { createOAuthState, consumeOAuthState } from "./oauthState.js";
 
 export interface ApiDeps {
   repository: Repository;
@@ -22,6 +24,14 @@ export interface ApiDeps {
   verifyIdToken: IdTokenVerifier;
   logger: Logger;
   credentialsEncryptionKey?: string;
+  /** Undefined when GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI aren't
+   * configured — /auth/google/* 501s rather than the app failing to boot,
+   * since Gmail OAuth is optional (the manual paste-credentials path on
+   * POST /accounts still works without it). */
+  googleOAuth?: GoogleOAuth;
+  /** Where /auth/google/callback redirects back to after connecting (or
+   * failing to connect) an account. */
+  webAppUrl?: string;
 }
 
 const connectAccountBody = z.object({
@@ -216,6 +226,67 @@ export function buildServer(deps: ApiDeps): FastifyInstance {
     const account = await loadOwnedAccount(repository, logger, user.uid, id);
     if (!account) return reply.code(404).send({ error: "Account not found" });
     return repository.listActionsForRun(runId);
+  });
+
+  const webAppUrl = deps.webAppUrl ?? "http://localhost:3000";
+
+  app.get("/auth/google/start", async (request, reply) => {
+    const user = await authenticate(request, reply, deps.verifyIdToken, logger);
+    if (!user) return;
+    if (!deps.googleOAuth) {
+      return reply.code(501).send({ error: "Google OAuth is not configured on this server" });
+    }
+    const state = createOAuthState(user.uid);
+    return { url: deps.googleOAuth.buildAuthUrl(state) };
+  });
+
+  // Google redirects the browser here directly — no Authorization header
+  // is possible on this request, which is exactly what the state token
+  // (bound to a uid at /auth/google/start) stands in for.
+  app.get("/auth/google/callback", async (request, reply) => {
+    if (!deps.googleOAuth) {
+      return reply.code(501).send({ error: "Google OAuth is not configured on this server" });
+    }
+    const { code, state, error } = request.query as { code?: string; state?: string; error?: string };
+    if (error) {
+      return reply.redirect(`${webAppUrl}/?oauthError=${encodeURIComponent(error)}`);
+    }
+    const uid = state ? consumeOAuthState(state) : null;
+    if (!uid || !code) {
+      return reply.redirect(`${webAppUrl}/?oauthError=invalid_state`);
+    }
+
+    try {
+      const tokenSet = await deps.googleOAuth.exchangeCode(code);
+      const encryptedCredentials = encryptCredentials(
+        JSON.stringify({
+          accessToken: tokenSet.accessToken,
+          refreshToken: tokenSet.refreshToken,
+          clientId: tokenSet.clientId,
+          clientSecret: tokenSet.clientSecret,
+          expiryDate: tokenSet.expiryDate,
+        }),
+        deps.credentialsEncryptionKey,
+      );
+      const account = await repository.createConnectedAccount({
+        userId: uid,
+        provider: "gmail",
+        displayName: tokenSet.email ?? "Gmail",
+        encryptedCredentials,
+      });
+      auditLog(logger, {
+        action: "account.connected",
+        actorUserId: uid,
+        resourceType: "connected_account",
+        resourceId: account.id,
+        outcome: "success",
+        meta: { provider: "gmail", via: "oauth" },
+      });
+      return reply.redirect(`${webAppUrl}/accounts/${account.id}`);
+    } catch (err) {
+      logger.error({ err }, "google oauth callback failed");
+      return reply.redirect(`${webAppUrl}/?oauthError=exchange_failed`);
+    }
   });
 
   return app;

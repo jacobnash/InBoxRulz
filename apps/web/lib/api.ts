@@ -80,6 +80,10 @@ export const api = {
   listAccounts: () => request<Account[]>("/accounts"),
   connectAccount: (body: { provider: string; displayName: string; credentials: Record<string, unknown> }) =>
     request<Account>("/accounts", { method: "POST", body: JSON.stringify(body) }),
+  /** Returns Google's consent screen URL; the caller does a full-page
+   * navigation to it (window.location.href), not a fetch — the browser
+   * has to actually land on accounts.google.com. */
+  connectGoogleStart: () => request<{ url: string }>("/auth/google/start"),
   getAccount: async (id: string) => (await api.listAccounts()).find((a) => a.id === id) ?? null,
   listRules: (accountId: string) => request<Rule[]>(`/accounts/${accountId}/rules`),
   upsertRule: (

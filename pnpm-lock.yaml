@@ -37,6 +37,9 @@ importers:
       firebase-admin:
         specifier: ^12.6.0
         version: 12.7.0
+      google-auth-library:
+        specifier: ^9.14.1
+        version: 9.15.1
       zod:
         specifier: ^3.23.8
         version: 3.25.76

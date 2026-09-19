@@ -11,9 +11,6 @@ export default function HomePage() {
 
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const [displayName, setDisplayName] = useState("");
-  const [credentialsJson, setCredentialsJson] = useState('{\n  "accessToken": "...",\n  "refreshToken": "..."\n}');
   const [connecting, setConnecting] = useState(false);
 
   async function refresh() {
@@ -28,18 +25,25 @@ export default function HomePage() {
     if (user) refresh();
   }, [user]);
 
-  async function handleConnect(e: React.FormEvent) {
-    e.preventDefault();
+  // /auth/google/callback redirects here with ?oauthError=... on failure
+  // (there's nothing to read on success — it redirects straight to the
+  // new account's own page instead).
+  useEffect(() => {
+    const oauthError = new URLSearchParams(window.location.search).get("oauthError");
+    if (oauthError) {
+      setError(`Google sign-in for Gmail failed: ${oauthError}`);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
+
+  async function handleConnectGoogle() {
     setError(null);
     setConnecting(true);
     try {
-      const credentials = JSON.parse(credentialsJson);
-      await api.connectAccount({ provider: "gmail", displayName, credentials });
-      setDisplayName("");
-      await refresh();
+      const { url } = await api.connectGoogleStart();
+      window.location.href = url;
     } catch (err) {
       setError(String(err));
-    } finally {
       setConnecting(false);
     }
   }
@@ -83,34 +87,11 @@ export default function HomePage() {
       <div className="card">
         <h2>Connect an inbox</h2>
         <p className="rule-desc">
-          This is a placeholder for the real Gmail/Outlook OAuth consent flow (spec section 9 — that
-          needs a registered, provider-reviewed OAuth app). For now, paste an already-obtained token
-          set to wire up the rest of the pipeline end to end.
+          Only Gmail is wired up so far — Outlook/IMAP adapters aren&apos;t built yet.
         </p>
-        <form onSubmit={handleConnect}>
-          <label htmlFor="displayName">Display name</label>
-          <input
-            id="displayName"
-            type="text"
-            required
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            placeholder="me@gmail.com"
-          />
-          <br />
-          <br />
-          <label htmlFor="credentials">Credentials JSON</label>
-          <textarea
-            id="credentials"
-            value={credentialsJson}
-            onChange={(e) => setCredentialsJson(e.target.value)}
-          />
-          <br />
-          <br />
-          <button type="submit" disabled={connecting}>
-            {connecting ? "Connecting…" : "Connect Gmail inbox"}
-          </button>
-        </form>
+        <button onClick={handleConnectGoogle} disabled={connecting}>
+          {connecting ? "Redirecting to Google…" : "Connect with Google"}
+        </button>
         {error && <p className="error">{error}</p>}
       </div>
     </>

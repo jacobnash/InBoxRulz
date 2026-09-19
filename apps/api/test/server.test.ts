@@ -6,6 +6,7 @@ import type { RescueClassifier } from "@inboxrulz/rules-engine";
 import { createLogger } from "@inboxrulz/logger";
 import { buildServer } from "../src/server.js";
 import type { IdTokenVerifier } from "../src/auth.js";
+import type { GoogleOAuth } from "../src/googleOAuth.js";
 import type { FastifyInstance } from "fastify";
 
 const TEST_KEY = Buffer.alloc(32, 9).toString("base64");
@@ -36,7 +37,21 @@ function captureAuditLogs() {
   return { logger, auditEntries };
 }
 
-function makeApp(repository = new InMemoryRepository()) {
+const fakeGoogleOAuth: GoogleOAuth = {
+  buildAuthUrl: (state) => `https://accounts.google.com/o/oauth2/v2/auth?state=${state}`,
+  exchangeCode: async (code) => {
+    if (code === "bad-code") throw new Error("invalid_grant");
+    return {
+      accessToken: "fake-access-token",
+      refreshToken: "fake-refresh-token",
+      clientId: "fake-client-id",
+      clientSecret: "fake-client-secret",
+      email: "connected@example.com",
+    };
+  },
+};
+
+function makeApp(repository = new InMemoryRepository(), googleOAuth: GoogleOAuth | undefined = fakeGoogleOAuth) {
   const { logger, auditEntries } = captureAuditLogs();
   return {
     repository,
@@ -48,6 +63,8 @@ function makeApp(repository = new InMemoryRepository()) {
       verifyIdToken: fakeVerifyIdToken,
       logger,
       credentialsEncryptionKey: TEST_KEY,
+      googleOAuth,
+      webAppUrl: "http://localhost:3000",
     }),
   };
 }
@@ -229,5 +246,81 @@ describe("API server", () => {
       headers: authHeader("user-1"),
     });
     expect(runsRes.json()).toHaveLength(1);
+  });
+
+  describe("Google OAuth connect flow", () => {
+    it("501s both routes when Google OAuth isn't configured", async () => {
+      const { logger } = captureAuditLogs();
+      app = buildServer({
+        repository: new InMemoryRepository(),
+        classifier,
+        connectorFor: () => new MockConnector({ messages: [] }),
+        verifyIdToken: fakeVerifyIdToken,
+        logger,
+        credentialsEncryptionKey: TEST_KEY,
+        // googleOAuth intentionally omitted
+      });
+      const start = await app.inject({
+        method: "GET",
+        url: "/auth/google/start",
+        headers: authHeader("user-1"),
+      });
+      expect(start.statusCode).toBe(501);
+
+      const callback = await app.inject({ method: "GET", url: "/auth/google/callback?code=x&state=y" });
+      expect(callback.statusCode).toBe(501);
+    });
+
+    it("requires auth to start, and returns Google's consent URL", async () => {
+      const unauthed = await app.inject({ method: "GET", url: "/auth/google/start" });
+      expect(unauthed.statusCode).toBe(401);
+
+      const res = await app.inject({ method: "GET", url: "/auth/google/start", headers: authHeader("user-1") });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().url).toContain("accounts.google.com");
+    });
+
+    it("completes the flow: exchanges the code, creates the account under the uid that started it, and redirects there", async () => {
+      const start = await app.inject({ method: "GET", url: "/auth/google/start", headers: authHeader("user-1") });
+      const state = new URL(start.json().url).searchParams.get("state")!;
+
+      const callback = await app.inject({
+        method: "GET",
+        url: `/auth/google/callback?code=good-code&state=${state}`,
+      });
+      expect(callback.statusCode).toBe(302);
+
+      const accounts = await repository.listConnectedAccountsForUser("user-1");
+      expect(accounts).toHaveLength(1);
+      expect(accounts[0].provider).toBe("gmail");
+      expect(accounts[0].displayName).toBe("connected@example.com");
+      expect(callback.headers.location).toBe(`http://localhost:3000/accounts/${accounts[0].id}`);
+      expect(auditEntries()).toContainEqual(
+        expect.objectContaining({ action: "account.connected", actorUserId: "user-1" }),
+      );
+    });
+
+    it("rejects a forged/expired state instead of creating an account", async () => {
+      const res = await app.inject({
+        method: "GET",
+        url: "/auth/google/callback?code=good-code&state=not-a-real-state",
+      });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("http://localhost:3000/?oauthError=invalid_state");
+      expect(await repository.listConnectedAccountsForUser("user-1")).toHaveLength(0);
+    });
+
+    it("redirects with an error (and creates no account) when the token exchange fails", async () => {
+      const start = await app.inject({ method: "GET", url: "/auth/google/start", headers: authHeader("user-1") });
+      const state = new URL(start.json().url).searchParams.get("state")!;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/auth/google/callback?code=bad-code&state=${state}`,
+      });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("http://localhost:3000/?oauthError=exchange_failed");
+      expect(await repository.listConnectedAccountsForUser("user-1")).toHaveLength(0);
+    });
   });
 });

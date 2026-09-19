@@ -3,6 +3,7 @@ import { readSecret, requireSecret } from "@inboxrulz/config";
 import { createLogger } from "@inboxrulz/logger";
 import { createConnectorForAccount, createAnthropicRescueClassifier, heuristicRescueClassifier } from "@inboxrulz/worker";
 import { createFirebaseIdTokenVerifier } from "./firebaseAuth.js";
+import { createGoogleOAuth } from "./googleOAuth.js";
 import { buildServer } from "./server.js";
 
 /**
@@ -41,6 +42,24 @@ if (!anthropicApiKey) {
   logger.warn("ANTHROPIC_API_KEY not set — rescue rule is using the conservative heuristic fallback, not an LLM.");
 }
 
+const googleOAuthClientId = readSecret("GOOGLE_OAUTH_CLIENT_ID");
+const googleOAuthClientSecret = readSecret("GOOGLE_OAUTH_CLIENT_SECRET");
+const googleOAuthRedirectUri = process.env.GOOGLE_OAUTH_REDIRECT_URI;
+const googleOAuth =
+  googleOAuthClientId && googleOAuthClientSecret && googleOAuthRedirectUri
+    ? createGoogleOAuth({
+        clientId: googleOAuthClientId,
+        clientSecret: googleOAuthClientSecret,
+        redirectUri: googleOAuthRedirectUri,
+      })
+    : undefined;
+if (!googleOAuth) {
+  logger.warn(
+    "GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI not fully set — /auth/google/* will 501; " +
+      "connecting a Gmail account falls back to the manual paste-credentials form.",
+  );
+}
+
 const app = buildServer({
   repository,
   classifier,
@@ -48,6 +67,8 @@ const app = buildServer({
   verifyIdToken: createFirebaseIdTokenVerifier(firebaseProjectId),
   logger,
   credentialsEncryptionKey,
+  googleOAuth,
+  webAppUrl: process.env.WEB_APP_URL,
 });
 
 const port = Number(process.env.PORT ?? 3001);

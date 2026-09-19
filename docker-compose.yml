@@ -45,7 +45,18 @@ services:
       CREDENTIALS_ENCRYPTION_KEY_FILE: /run/secrets/credentials_encryption_key
       DATABASE_URL_FILE: /run/secrets/database_url
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
-    secrets: [credentials_encryption_key, database_url, anthropic_api_key]
+      GOOGLE_OAUTH_CLIENT_ID_FILE: /run/secrets/google_oauth_client_id
+      GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google_oauth_client_secret
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI}
+      WEB_APP_URL: ${WEB_APP_URL}
+    secrets:
+      [
+        credentials_encryption_key,
+        database_url,
+        anthropic_api_key,
+        google_oauth_client_id,
+        google_oauth_client_secret,
+      ]
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,6 +104,10 @@ secrets:
     file: ./secrets/database_url
   anthropic_api_key:
     file: ./secrets/anthropic_api_key
+  google_oauth_client_id:
+    file: ./secrets/google_oauth_client_id
+  google_oauth_client_secret:
+    file: ./secrets/google_oauth_client_secret
 
 volumes:
   pgdata:

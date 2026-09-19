@@ -18,9 +18,19 @@ gen() {
   echo "wrote secrets/$name"
 }
 
+empty() {
+  local name="$1"
+  [[ -f "secrets/$name" ]] && return
+  touch "secrets/$name"
+  chmod 600 "secrets/$name"
+  echo "wrote secrets/$name (empty — fill in manually, optional: $2)"
+}
+
 gen postgres_password bash -c 'openssl rand -base64 24'
 gen credentials_encryption_key bash -c 'openssl rand -base64 32'
-[[ -f secrets/anthropic_api_key ]] || { touch secrets/anthropic_api_key; chmod 600 secrets/anthropic_api_key; echo "wrote secrets/anthropic_api_key (empty — fill in for real LLM rescue classification, optional)"; }
+empty anthropic_api_key "real LLM rescue classification instead of the heuristic fallback"
+empty google_oauth_client_id "Gmail OAuth connect flow instead of the manual paste-credentials form"
+empty google_oauth_client_secret "pairs with google_oauth_client_id above"
 
 if [[ ! -f secrets/database_url ]]; then
   pw=$(cat secrets/postgres_password)
